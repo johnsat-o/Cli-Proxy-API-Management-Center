@@ -105,7 +105,7 @@ describe('projectLane', () => {
     provider: 'claude',
     anchorMs: at(2026, 6, 29, 20),
     periodHours: 24 * 7,
-    remaining: 40,
+    used: 40,
     limits: [],
     resetCredits: [],
     ...over,
@@ -122,19 +122,19 @@ describe('projectLane', () => {
     expect(live.length).toBe(1);
     expect(live[0].startMs).toBeLessThanOrEqual(now);
     expect(live[0].endMs).toBeGreaterThan(now);
-    expect(live[0].remaining).toBe(40);
+    expect(live[0].used).toBe(40);
     expect(windows.filter((w) => w.state === 'past').every((w) => w.endMs <= now)).toBe(true);
     expect(windows.filter((w) => w.state === 'next').every((w) => w.startMs > now)).toBe(true);
   });
 
-  test('does not carry stale remaining usage past the reported reset', () => {
+  test('does not carry stale usage past the reported reset', () => {
     const nowAfterReset = at(2026, 6, 30, 12);
     const windows = projectLane(lane(), span.startMs, span.endMs, nowAfterReset, 'weekly');
     const live = windows.find((window) => window.state === 'live');
 
     expect(live).toBeDefined();
     expect(live?.startMs).toBe(at(2026, 6, 29, 20));
-    expect(live?.remaining).toBeNull();
+    expect(live?.used).toBeNull();
   });
 
   test('clips bars to the visible span', () => {
@@ -241,7 +241,7 @@ describe('pickLaneWindow', () => {
 describe('buildTimelineLane', () => {
   const base = { name: 'a.json', displayName: 'Alice' };
 
-  test('claude/codex: anchors on the span-appropriate window, remaining from used', () => {
+  test('claude/codex: anchors on the span-appropriate window, used share as stored', () => {
     const soon = at(2026, 6, 29, 20);
     const later = at(2026, 7, 1, 20);
     const quota = {
@@ -261,7 +261,7 @@ describe('buildTimelineLane', () => {
     });
     expect(weekly.anchorMs).toBe(later);
     expect(weekly.periodHours).toBe(168);
-    expect(weekly.remaining).toBe(7); // stored USED
+    expect(weekly.used).toBe(93); // stored USED, shown as-is
 
     // Three-day view: the weekly window doesn't fit, so the short one is used.
     const session = buildTimelineLane({
@@ -272,12 +272,12 @@ describe('buildTimelineLane', () => {
     });
     expect(session.anchorMs).toBe(soon);
     expect(session.periodHours).toBe(5);
-    expect(session.remaining).toBe(80);
+    expect(session.used).toBe(20);
 
     // Every limit is still summarized in the lane head regardless of the pick.
     expect(weekly.limits).toEqual([
-      { label: '7-day', remaining: 7 },
-      { label: '5-hour', remaining: 80 },
+      { label: '7-day', used: 93 },
+      { label: '5-hour', used: 20 },
     ]);
   });
 
@@ -311,7 +311,7 @@ describe('buildTimelineLane', () => {
 
     expect(lane.anchorMs).toBe(accountReset);
     expect(lane.periodHours).toBe(168);
-    expect(lane.remaining).toBe(30);
+    expect(lane.used).toBe(70);
   });
 
   test('codex: includes available reset credits with parseable expiry dates', () => {
@@ -349,7 +349,7 @@ describe('buildTimelineLane', () => {
     ]);
   });
 
-  test('kimi: derives remaining from raw used/limit counts', () => {
+  test('kimi: derives the used share from raw used/limit counts', () => {
     const lane = buildTimelineLane({
       ...base,
       provider: 'kimi',
@@ -365,14 +365,14 @@ describe('buildTimelineLane', () => {
     });
 
     expect(lane.anchorMs).toBe(5000);
-    expect(lane.remaining).toBe(46);
+    expect(lane.used).toBe(54);
     expect(lane.limits).toEqual([
-      { label: 'Daily', remaining: 46 },
-      { label: 'Monthly', remaining: 73 },
+      { label: 'Daily', used: 54 },
+      { label: 'Monthly', used: 27 },
     ]);
   });
 
-  test('antigravity anchors on its bucket reset, with remaining from the fraction', () => {
+  test('antigravity anchors on its bucket reset, with used share from the fraction', () => {
     const lane = buildTimelineLane({
       ...base,
       provider: 'antigravity',
@@ -393,11 +393,11 @@ describe('buildTimelineLane', () => {
     // Longest window that fits wins, exactly as it does for claude/codex.
     expect(lane.anchorMs).toBe(5000);
     expect(lane.periodHours).toBe(168);
-    // remainingFraction is REMAINING, so it is not inverted.
-    expect(lane.remaining).toBe(82);
+    // remainingFraction is REMAINING, so it is inverted into the used share.
+    expect(lane.used).toBe(18);
     expect(lane.limits).toEqual([
-      { label: '5h', remaining: 40 },
-      { label: 'Weekly', remaining: 82 },
+      { label: '5h', used: 60 },
+      { label: 'Weekly', used: 18 },
     ]);
   });
 
@@ -435,7 +435,7 @@ describe('buildTimelineLane', () => {
 
     expect(lane.anchorMs).toBe(9000);
     expect(lane.periodHours).toBe(168);
-    expect(lane.remaining).toBe(95);
+    expect(lane.used).toBe(5);
     // Product usage is a contribution to the total, not a separate quota pool.
     expect(lane.limits).toEqual([]);
   });

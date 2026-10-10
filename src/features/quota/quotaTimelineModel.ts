@@ -8,6 +8,9 @@
  * back, and does it come back all at once?* Four credentials all resetting on
  * the same evening is a very different situation from four staggered across a
  * week, and no per-card percentage shows that.
+ *
+ * Every percentage here is the USED share, 0..100: the bar fills as quota is
+ * consumed and the number says how full the window is, matching the cards.
  */
 
 import { DAY_MS, HOUR_MS } from '@/utils/time/durations';
@@ -29,8 +32,8 @@ const SESSION_PERIOD_HOURS = 5;
 /** A limit summarized in the lane's left column. */
 export interface TimelineLimit {
   label: string;
-  /** Remaining percent, 0..100. */
-  remaining: number;
+  /** Used percent, 0..100. */
+  used: number;
 }
 
 /** A manual quota-reset credit attached to a Codex credential. */
@@ -54,8 +57,8 @@ export interface TimelineLane {
   anchorMs: number | null;
   /** Window length in hours. */
   periodHours: number | null;
-  /** Remaining percent reported for the window ending at `anchorMs`. */
-  remaining: number | null;
+  /** Used percent reported for the window ending at `anchorMs`. */
+  used: number | null;
   limits: TimelineLimit[];
   resetCredits: TimelineResetCredit[];
 }
@@ -68,8 +71,8 @@ export interface TimelineWindow {
   leftPercent: number;
   widthPercent: number;
   state: 'past' | 'live' | 'next';
-  /** Remaining percent only when this is the API-reported current window. */
-  remaining: number | null;
+  /** Used percent only when this is the API-reported current window. */
+  used: number | null;
 }
 
 /**
@@ -179,9 +182,9 @@ export function projectLane(
         leftPercent: left,
         widthPercent: right - left,
         state,
-        // `lane.remaining` belongs to the current payload window ending at the
+        // `lane.used` belongs to the current payload window ending at the
         // anchor. Once that reset passes, projected windows must not reuse it.
-        remaining: state === 'live' && window.endMs === lane.anchorMs ? lane.remaining : null,
+        used: state === 'live' && window.endMs === lane.anchorMs ? lane.used : null,
       };
     })
     .filter((window): window is TimelineWindow => window !== null);
@@ -350,7 +353,7 @@ export function buildTimelineLane(input: TimelineLaneInput): TimelineLane {
     provider,
     anchorMs: null,
     periodHours: null,
-    remaining: null,
+    used: null,
     limits: [],
     resetCredits: [],
   };
@@ -405,13 +408,12 @@ export function buildTimelineLane(input: TimelineLaneInput): TimelineLane {
       anchorMs: chosen.resetAtMs ?? null,
       periodHours: chosen.periodHours ?? null,
       // Claude and Codex store percent USED.
-      remaining:
-        typeof chosen.usedPercent === 'number' ? clampPercent(100 - chosen.usedPercent) : null,
+      used: typeof chosen.usedPercent === 'number' ? clampPercent(chosen.usedPercent) : null,
       limits: windows
         .filter((window) => typeof window.usedPercent === 'number')
         .map((window) => ({
           label: window.label ?? '',
-          remaining: clampPercent(100 - (window.usedPercent as number)),
+          used: clampPercent(window.usedPercent as number),
         })),
       resetCredits,
     };
@@ -432,16 +434,19 @@ export function buildTimelineLane(input: TimelineLaneInput): TimelineLane {
       ).windows ?? [];
     const chosen = pickLaneWindow(windows, maxPeriodHours);
     if (!chosen) return empty;
+    // Devin reports percent REMAINING.
+    const usedOf = (remainingPercent: number | null) =>
+      remainingPercent === null ? null : clampPercent(100 - remainingPercent);
     return {
       ...empty,
       anchorMs: chosen.resetAtMs,
       periodHours: chosen.periodHours,
-      remaining: chosen.remainingPercent,
+      used: usedOf(chosen.remainingPercent),
       limits: windows
         .filter((window) => window.remainingPercent !== null)
         .map((window) => ({
           label: window.label ?? window.id,
-          remaining: window.remainingPercent as number,
+          used: usedOf(window.remainingPercent) as number,
         })),
     };
   }
@@ -455,8 +460,8 @@ export function buildTimelineLane(input: TimelineLaneInput): TimelineLane {
     if (!billing || billing.periodType !== 'weekly') return empty;
     if (typeof billing.resetAtMs !== 'number' || !Number.isFinite(billing.resetAtMs)) return empty;
 
-    const remaining =
-      typeof billing.usagePercent === 'number' ? clampPercent(100 - billing.usagePercent) : null;
+    const used =
+      typeof billing.usagePercent === 'number' ? clampPercent(billing.usagePercent) : null;
 
     return {
       ...empty,
@@ -464,7 +469,7 @@ export function buildTimelineLane(input: TimelineLaneInput): TimelineLane {
       // A payload that states an end without a start can't derive its own
       // length; weekly is what `periodType` already told us.
       periodHours: billing.periodHours ?? 24 * 7,
-      remaining,
+      used,
       // Products contribute to the shared weekly usage, not independent limits.
       limits: [],
     };
@@ -480,19 +485,19 @@ export function buildTimelineLane(input: TimelineLaneInput): TimelineLane {
     if (!chosen) return empty;
 
     // Antigravity reports the fraction REMAINING, not percent used.
-    const remainingOf = (bucket: AntigravityBucketLike) =>
+    const usedOf = (bucket: AntigravityBucketLike) =>
       typeof bucket.remainingFraction === 'number'
-        ? clampPercent(Math.round(bucket.remainingFraction * 100))
+        ? clampPercent(Math.round((1 - bucket.remainingFraction) * 100))
         : null;
 
     return {
       ...empty,
       anchorMs: chosen.resetAtMs ?? null,
       periodHours: chosen.periodHours ?? null,
-      remaining: remainingOf(chosen),
+      used: usedOf(chosen),
       limits: buckets
-        .map((bucket) => ({ label: bucket.label ?? '', remaining: remainingOf(bucket) }))
-        .filter((limit): limit is TimelineLimit => limit.remaining !== null),
+        .map((bucket) => ({ label: bucket.label ?? '', used: usedOf(bucket) }))
+        .filter((limit): limit is TimelineLimit => limit.used !== null),
     };
   }
 
@@ -503,18 +508,18 @@ export function buildTimelineLane(input: TimelineLaneInput): TimelineLane {
     const chosen = pickLaneWindow(rows, maxPeriodHours);
     if (!chosen) return empty;
 
-    // Kimi reports raw counts; remaining is derived.
-    const remainingOf = (row: KimiRowLike) =>
-      row.limit > 0 ? clampPercent(Math.round(((row.limit - row.used) / row.limit) * 100)) : null;
+    // Kimi reports raw counts; the used share is derived.
+    const usedOf = (row: KimiRowLike) =>
+      row.limit > 0 ? clampPercent(Math.round((row.used / row.limit) * 100)) : null;
 
     return {
       ...empty,
       anchorMs: chosen.resetAtMs ?? null,
       periodHours: chosen.periodHours ?? null,
-      remaining: remainingOf(chosen),
+      used: usedOf(chosen),
       limits: rows
-        .map((row) => ({ label: row.label ?? '', remaining: remainingOf(row) }))
-        .filter((limit): limit is TimelineLimit => limit.remaining !== null),
+        .map((row) => ({ label: row.label ?? '', used: usedOf(row) }))
+        .filter((limit): limit is TimelineLimit => limit.used !== null),
     };
   }
 
@@ -542,22 +547,22 @@ export function buildTimelineLane(input: TimelineLaneInput): TimelineLane {
     const chosen = pickLaneWindow(windows, maxPeriodHours);
     if (!chosen) return empty;
 
-    const remainingOf = (window: MetaWindowLike) =>
+    const usedOf = (window: MetaWindowLike) =>
       typeof window.usedPercent === 'number' && Number.isFinite(window.usedPercent)
-        ? clampPercent(100 - window.usedPercent)
+        ? clampPercent(window.usedPercent)
         : null;
 
     return {
       ...empty,
       anchorMs: chosen.resetAtMs,
       periodHours: chosen.periodHours,
-      remaining: remainingOf(chosen),
+      used: usedOf(chosen),
       limits: windows
         .map((window) => ({
           label: `meta_quota.${window.id}`,
-          remaining: remainingOf(window),
+          used: usedOf(window),
         }))
-        .filter((limit): limit is TimelineLimit => limit.remaining !== null),
+        .filter((limit): limit is TimelineLimit => limit.used !== null),
     };
   }
 

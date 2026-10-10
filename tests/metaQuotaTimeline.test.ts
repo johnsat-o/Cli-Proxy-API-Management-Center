@@ -91,14 +91,14 @@ describe('Meta quota timeline lane', () => {
 
     expect(lane.anchorMs).toBe(NOW_MS + 7 * 24 * 60 * 60 * 1000);
     expect(lane.periodHours).toBe(168);
-    expect(lane.remaining).toBe(60);
+    expect(lane.used).toBe(40);
     expect(lane.limits).toEqual([
-      { label: 'meta_quota.window', remaining: 100 },
-      { label: 'meta_quota.weekly', remaining: 60 },
+      { label: 'meta_quota.window', used: 0 },
+      { label: 'meta_quota.weekly', used: 40 },
     ]);
   });
 
-  test('does not turn null usage into either zero or 100 percent remaining', () => {
+  test('does not turn null usage into either zero or 100 percent used', () => {
     const quota = state([
       {
         id: 'weekly',
@@ -115,7 +115,7 @@ describe('Meta quota timeline lane', () => {
       maxPeriodHours: 14 * 24,
     });
 
-    expect(lane.remaining).toBeNull();
+    expect(lane.used).toBeNull();
     expect(lane.limits).toEqual([]);
   });
 });
