@@ -16,17 +16,20 @@ export interface QuotaMeterProps {
   percent: number | null;
   classes: QuotaClassMap;
   index?: number;
+  /** percent is the used share: the bar fills as quota is consumed; colours still key on what is left. */
+  usage?: boolean;
 }
 
-export function QuotaMeter({ percent, classes, index }: QuotaMeterProps) {
+export function QuotaMeter({ percent, classes, index, usage = false }: QuotaMeterProps) {
   const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
   const normalized = percent === null ? null : clamp(percent, 0, 100);
+  const remaining = normalized === null ? null : usage ? 100 - normalized : normalized;
   const fillClass =
-    normalized === null
+    remaining === null
       ? classes.quotaBarFillMedium
-      : normalized >= QUOTA_PROGRESS_HIGH_THRESHOLD
+      : remaining >= QUOTA_PROGRESS_HIGH_THRESHOLD
         ? classes.quotaBarFillHigh
-        : normalized >= QUOTA_PROGRESS_MEDIUM_THRESHOLD
+        : remaining >= QUOTA_PROGRESS_MEDIUM_THRESHOLD
           ? classes.quotaBarFillMedium
           : classes.quotaBarFillLow;
   const widthPercent = Math.round((normalized ?? 0) * 100) / 100;
