@@ -155,7 +155,20 @@ class ApiClient {
 
         return response;
       },
-      (error) => Promise.reject(this.handleError(error))
+      (error) => {
+        // jo fork: proxy 8.0.x serves these routes as /auth-files; newer releases renamed them
+        // /credentials. Retry once on the old name so the accounts page works on either.
+        const config = axios.isAxiosError(error) ? error.config : undefined;
+        const url = config?.url;
+        if (
+          config &&
+          url?.startsWith('/credentials') &&
+          error.response?.status === 404
+        ) {
+          return this.instance.request({ ...config, url: url.replace(/^\/credentials/, '/auth-files') });
+        }
+        return Promise.reject(this.handleError(error));
+      }
     );
   }
 
