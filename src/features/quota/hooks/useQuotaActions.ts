@@ -27,7 +27,11 @@ export function useQuotaActions(disableControls: boolean) {
   const [resettingQuotaName, setResettingQuotaName] = useState<string | null>(null);
 
   const refreshQuota = useCallback(
-    async (file: AuthFileItem, adapter: QuotaAdapter, options?: { autoRetry?: boolean }) => {
+    async (
+      file: AuthFileItem,
+      adapter: QuotaAdapter,
+      options?: { autoRetry?: boolean; attempt?: number }
+    ) => {
       if (disableControls || file.disabled) return;
       const cacheKey = getQuotaCacheKey(file);
       if (resettingQuotaName === cacheKey) return;

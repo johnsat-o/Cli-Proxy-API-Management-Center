@@ -37,6 +37,7 @@ import {
 import { normalizeAuthIndex } from '@/utils/authIndex';
 import type { QuotaFetchOptions, QuotaProviderData } from '../types';
 import {
+  CLAUDE_AUTO_RETRY_MAX,
   CLAUDE_PLAN_CACHE_TTL_MS,
   CLAUDE_USAGE_CACHE_TTL_MS,
   buildClaudeSignalWindows,
@@ -205,6 +206,36 @@ const quotaFromPayload = (
   resetGrants: parseAnthropicResetGrantStatus(payload.cedar_ember),
 });
 
+/**
+ * Cached windows with the proxy's fresher per-window numbers laid over them.
+ * The cache keeps every bar (the proxy only has headers for the model it last
+ * relayed); the proxy has the newer utilization. Null when the proxy has
+ * nothing newer than the cache.
+ */
+export const overlayProxySignals = (
+  windows: ClaudeQuotaWindow[],
+  usageAt: number | undefined,
+  fromSignals: ReturnType<typeof buildClaudeSignalWindows>
+): { windows: ClaudeQuotaWindow[]; observedAtMs: number } | null => {
+  if (!fromSignals || fromSignals.observedAtMs === null) return null;
+  if (usageAt !== undefined && fromSignals.observedAtMs <= usageAt) return null;
+  const byId = new Map(fromSignals.windows.map((window) => [window.id, window]));
+  return {
+    observedAtMs: fromSignals.observedAtMs,
+    windows: windows.map((window) => {
+      const fresh = byId.get(window.id);
+      return fresh
+        ? {
+            ...window,
+            usedPercent: fresh.usedPercent,
+            resetLabel: fresh.resetLabel,
+            resetAtMs: fresh.resetAtMs,
+          }
+        : window;
+    }),
+  };
+};
+
 /** The cached usage when it is young enough to skip the network, else null. */
 export const readFreshClaudeQuota = (
   file: AuthFileItem,
@@ -277,18 +308,30 @@ const fetchClaudeQuota = async (
   }
 
   if (result.statusCode === 429) {
+    const attempt = (options.attempt ?? 0) + 1;
     const retry = {
       retryAtMs: now + parseRetryAfterMs(result.header, now),
-      autoRetry: !options.autoRetry,
+      autoRetry: attempt <= CLAUDE_AUTO_RETRY_MAX,
+      attempt,
     };
+    const fromSignals = buildClaudeSignalWindows(file, t);
     if (cached?.usage) {
+      const base = quotaFromPayload(cached.usage, planType, t);
+      const overlaid = overlayProxySignals(base.windows, cached.usageAt, fromSignals);
+      if (overlaid) {
+        return {
+          ...base,
+          windows: overlaid.windows,
+          stale: true,
+          notice: { source: 'proxy', asOfMs: overlaid.observedAtMs, ...retry },
+        };
+      }
       return {
-        ...quotaFromPayload(cached.usage, planType, t),
+        ...base,
         stale: true,
         notice: { source: 'cache', asOfMs: cached.usageAt ?? null, ...retry },
       };
     }
-    const fromSignals = buildClaudeSignalWindows(file, t);
     if (fromSignals) {
       return {
         windows: fromSignals.windows,

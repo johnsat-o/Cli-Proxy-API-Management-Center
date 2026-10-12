@@ -15,6 +15,8 @@ export const CLAUDE_USAGE_CACHE_TTL_MS = 120 * 1000;
 /** The plan type rarely changes; the profile call is skipped while this holds. */
 export const CLAUDE_PLAN_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 export const CLAUDE_RETRY_AFTER_DEFAULT_MS = 60 * 1000;
+/** Automatic retries after a 429 before the card asks for a manual refresh. */
+export const CLAUDE_AUTO_RETRY_MAX = 3;
 export const CLAUDE_RETRY_AFTER_MAX_MS = 300 * 1000;
 
 const STORAGE_KEY = 'cli-proxy-claude-usage-cache-v1';

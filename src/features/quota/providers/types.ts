@@ -49,6 +49,8 @@ export interface QuotaFetchOptions {
   force?: boolean;
   /** This fetch is the provider's own automatic retry. */
   autoRetry?: boolean;
+  /** How many 429 answers this card has had in a row before this fetch. */
+  attempt?: number;
 }
 
 export interface QuotaProviderData<TState, TData> {

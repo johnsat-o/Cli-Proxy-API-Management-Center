@@ -188,8 +188,10 @@ export interface ClaudeQuotaNotice {
   asOfMs: number | null;
   /** When the lookup may be tried again, epoch ms (from Retry-After). */
   retryAtMs: number;
-  /** True until the single automatic retry has run. */
+  /** True while automatic retries remain for this run of 429s. */
   autoRetry: boolean;
+  /** How many 429 answers in a row this one makes (1 on the first). */
+  attempt: number;
 }
 
 export interface ClaudeQuotaState {

@@ -25,10 +25,10 @@ export function useClaudeQuotaCacheHydrate(entries: QuotaFileEntry[]) {
   }, [entries, t]);
 }
 
-/** After a 429, retry each card once when its Retry-After elapses. */
+/** After a 429, retry each card when its Retry-After elapses, up to CLAUDE_AUTO_RETRY_MAX times. */
 export function useClaudeQuotaAutoRetry(
   entries: QuotaFileEntry[],
-  retry: (file: AuthFileItem) => void
+  retry: (file: AuthFileItem, attempt: number) => void
 ) {
   const claudeQuota = useQuotaStore((state) => state.claudeQuota);
   const fired = useRef(new Set<string>());
@@ -46,7 +46,7 @@ export function useClaudeQuotaAutoRetry(
       timers.push(
         window.setTimeout(() => {
           fired.current.add(key);
-          retry(file);
+          retry(file, notice.attempt);
         }, delay)
       );
     });

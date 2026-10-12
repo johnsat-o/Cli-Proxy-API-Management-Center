@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import type { TFunction } from 'i18next';
-import { CLAUDE_CONFIG, readFreshClaudeQuota } from '@/features/quota/providers/claude/data';
+import {
+  CLAUDE_CONFIG,
+  overlayProxySignals,
+  readFreshClaudeQuota,
+} from '@/features/quota/providers/claude/data';
 import {
   buildClaudeSignalWindows,
   parseRetryAfterMs,
@@ -78,10 +82,18 @@ describe('proxy signal fallback', () => {
   });
 
   test('a 429 with nothing to show renders as the error state', () => {
-    const notice = { source: 'none', asOfMs: null, retryAtMs: 1, autoRetry: true } as const;
-    expect(CLAUDE_CONFIG.buildSuccessState({ windows: [], notice, error: '429 x' })).toMatchObject(
-      { status: 'error', errorStatus: 429, error: '429 x' }
-    );
+    const notice = {
+      source: 'none',
+      asOfMs: null,
+      retryAtMs: 1,
+      autoRetry: true,
+      attempt: 1,
+    } as const;
+    expect(CLAUDE_CONFIG.buildSuccessState({ windows: [], notice, error: '429 x' })).toMatchObject({
+      status: 'error',
+      errorStatus: 429,
+      error: '429 x',
+    });
   });
 });
 
@@ -118,5 +130,85 @@ describe('banked resets ride along with the usage lookup', () => {
     expect(readFreshClaudeQuota(file(), t, now)?.resetGrants?.grants[0].id).toBe('launch');
     writeClaudeUsageCache('abc', { usage: { five_hour: { utilization: 1, resets_at: null } } });
     expect(readFreshClaudeQuota(file(), t, now)?.resetGrants).toBeNull();
+  });
+});
+
+describe('rate-limited fallback', () => {
+  const originalRequest = apiCallApi.request;
+  afterEach(() => {
+    apiCallApi.request = originalRequest;
+    store.clear();
+  });
+
+  const signals = {
+    observed_at: '2026-10-12T05:00:00-05:00',
+    signals: {
+      'Anthropic-Ratelimit-Unified-5h-Utilization': '0.4',
+      'Anthropic-Ratelimit-Unified-5h-Reset': '1791804600',
+    },
+  };
+  const cachedUsage = {
+    five_hour: { utilization: 30, resets_at: null },
+    seven_day: { utilization: 44, resets_at: null },
+    limits: [
+      {
+        kind: 'weekly_scoped',
+        percent: 68,
+        is_active: true,
+        scope: { model: { display_name: 'Fable 5' } },
+      },
+    ],
+  };
+
+  test("keeps every cached bar and lays the proxy's newer numbers over it", () => {
+    writeClaudeUsageCache('abc', {
+      usage: cachedUsage,
+      usageAt: Date.parse('2026-10-12T04:00:00-05:00'),
+    });
+    const cached = readFreshClaudeQuota(file(), t, Date.parse('2026-10-12T04:00:30-05:00'))!;
+    const overlaid = overlayProxySignals(
+      cached.windows,
+      Date.parse('2026-10-12T04:00:00-05:00'),
+      buildClaudeSignalWindows(file({ quota: signals }), t)
+    )!;
+    expect(overlaid.windows.map((w) => [w.id, w.usedPercent])).toEqual([
+      ['five-hour', 40],
+      ['seven-day', 44],
+      ['seven-day-fable', 68],
+    ]);
+    expect(overlaid.observedAtMs).toBe(Date.parse('2026-10-12T05:00:00-05:00'));
+    // Older proxy headers change nothing.
+    expect(
+      overlayProxySignals(
+        cached.windows,
+        Date.parse('2026-10-12T06:00:00-05:00'),
+        buildClaudeSignalWindows(file({ quota: signals }), t)
+      )
+    ).toBeNull();
+  });
+
+  test('a 429 counts attempts and stops retrying after the third', async () => {
+    apiCallApi.request = async () => ({
+      statusCode: 429,
+      body: null,
+      bodyText: '',
+      header: { 'Retry-After': ['30'] },
+    });
+    writeClaudeUsageCache('abc', { usage: cachedUsage, usageAt: 1 });
+    const first = await CLAUDE_CONFIG.fetchQuota(file({ quota: signals }), t, { force: true });
+    expect(first.notice).toMatchObject({ source: 'proxy', autoRetry: true, attempt: 1 });
+    expect(first.windows.map((w) => w.id)).toEqual(['five-hour', 'seven-day', 'seven-day-fable']);
+    const third = await CLAUDE_CONFIG.fetchQuota(file(), t, {
+      force: true,
+      autoRetry: true,
+      attempt: 2,
+    });
+    expect(third.notice).toMatchObject({ source: 'cache', autoRetry: true, attempt: 3 });
+    const fourth = await CLAUDE_CONFIG.fetchQuota(file(), t, {
+      force: true,
+      autoRetry: true,
+      attempt: 3,
+    });
+    expect(fourth.notice).toMatchObject({ autoRetry: false, attempt: 4 });
   });
 });

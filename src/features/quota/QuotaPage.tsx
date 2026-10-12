@@ -305,7 +305,8 @@ export function QuotaPage() {
 
   useClaudeQuotaCacheHydrate(pageItems);
   const retryClaudeQuota = useCallback(
-    (file: AuthFileItem) => void refreshQuota(file, QUOTA_ADAPTERS.claude, { autoRetry: true }),
+    (file: AuthFileItem, attempt: number) =>
+      void refreshQuota(file, QUOTA_ADAPTERS.claude, { autoRetry: true, attempt }),
     [refreshQuota]
   );
   useClaudeQuotaAutoRetry(pageItems, retryClaudeQuota);
