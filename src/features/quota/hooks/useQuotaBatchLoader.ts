@@ -16,7 +16,7 @@ import { getQuotaCacheKey } from '@/utils/quota/identity';
 import type { QuotaFileEntry } from '../logic';
 import { QUOTA_ADAPTERS, getQuotaSetter, type QuotaCardState } from '../providers';
 import { enrichQuotaInBackground } from '../quotaEnrichment';
-import type { QuotaProviderType } from '../providers/types';
+import type { QuotaFetchOptions, QuotaProviderType } from '../providers/types';
 
 interface BatchFetchResult {
   name: string;
@@ -34,7 +34,7 @@ export function useQuotaBatchLoader() {
   const requestIdRef = useRef(0);
 
   const loadQuota = useCallback(
-    async (targets: QuotaFileEntry[]) => {
+    async (targets: QuotaFileEntry[], options?: QuotaFetchOptions) => {
       if (loadingRef.current) return;
       if (targets.length === 0) return;
       loadingRef.current = true;
@@ -69,7 +69,7 @@ export function useQuotaBatchLoader() {
               entries.map(async ({ file }): Promise<BatchFetchResult> => {
                 const cacheKey = getQuotaCacheKey(file);
                 try {
-                  const data = await adapter.fetchQuota(file, t);
+                  const data = await adapter.fetchQuota(file, t, options);
                   return { name: file.name, cacheKey, status: 'success', data };
                 } catch (err: unknown) {
                   const message = err instanceof Error ? err.message : t('common.unknown_error');

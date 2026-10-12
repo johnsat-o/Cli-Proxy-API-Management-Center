@@ -44,11 +44,18 @@ export interface QuotaStore {
   clearQuotaCache: () => void;
 }
 
+export interface QuotaFetchOptions {
+  /** Skip any provider-side cache (the Refresh buttons). */
+  force?: boolean;
+  /** This fetch is the provider's own automatic retry. */
+  autoRetry?: boolean;
+}
+
 export interface QuotaProviderData<TState, TData> {
   type: QuotaProviderType;
   i18nPrefix: string;
   filterFn: (file: AuthFileItem) => boolean;
-  fetchQuota: (file: AuthFileItem, t: TFunction) => Promise<TData>;
+  fetchQuota: (file: AuthFileItem, t: TFunction, options?: QuotaFetchOptions) => Promise<TData>;
   /** Optional details loaded only after the primary quota has been committed. */
   enrichQuota?: (file: AuthFileItem, data: TData, t: TFunction) => Promise<TData>;
   resetQuota?: (file: AuthFileItem, t: TFunction) => Promise<TData>;

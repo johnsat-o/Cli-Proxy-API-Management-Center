@@ -24,6 +24,8 @@ import { QUOTA_ADAPTERS, type QuotaCardState } from '../providers';
 import { isQuotaRefreshDisabled, type QuotaFileEntry } from '../logic';
 import { useClaudeResetGrants } from '../providers/claude/ClaudeResetGrants';
 import { ClaudeResetGrantDetails } from '../providers/claude/ClaudeResetGrantDetails';
+import { ClaudeQuotaNotice } from '../providers/claude/ClaudeQuotaNotice';
+import type { ClaudeQuotaState } from '@/types';
 import bodyStyles from './QuotaBody.module.scss';
 import styles from './QuotaCard.module.scss';
 
@@ -69,14 +71,17 @@ export function QuotaCard(props: QuotaCardProps) {
   const loading = status === 'loading';
   const claudeReset = useClaudeResetGrants(
     file,
-    entry.type === 'claude' && status !== 'idle',
+    // The grant read hits Anthropic's rate-limited usage endpoint: only after a live lookup.
+    entry.type === 'claude' && status !== 'idle' && !(quota as ClaudeQuotaState | undefined)?.stale,
     !canRefresh || loading || resetting,
     quota,
     onRefresh
   );
   const providerType =
     entry.type === 'plugin'
-      ? String(file.quotaProvider ?? file['quota_provider'] ?? file.provider ?? file.type ?? 'plugin')
+      ? String(
+          file.quotaProvider ?? file['quota_provider'] ?? file.provider ?? file.type ?? 'plugin'
+        )
       : entry.type;
   const iconSrc = getAuthFileIcon(providerType, resolvedTheme);
   const typeLabel = getTypeLabel(t, providerType);
@@ -85,6 +90,8 @@ export function QuotaCard(props: QuotaCardProps) {
     quota?.errorStatus,
     quota?.error || t('common.unknown_error')
   );
+  const claudeNotice =
+    entry.type === 'claude' ? (quota as ClaudeQuotaState | undefined)?.notice : undefined;
   const showReset =
     status === 'success' &&
     Boolean(adapter.resetQuota) &&
@@ -157,6 +164,7 @@ export function QuotaCard(props: QuotaCardProps) {
         ) : status === 'error' ? (
           <div className={styles.errorStrip} role="alert">
             {t(`${adapter.i18nPrefix}.load_failed`, { message: errorMessage })}
+            {claudeNotice && <ClaudeQuotaNotice notice={claudeNotice} />}
           </div>
         ) : quota ? (
           <adapter.Body quota={quota} classes={quotaClasses} />

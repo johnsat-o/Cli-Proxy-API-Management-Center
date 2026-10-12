@@ -9,6 +9,7 @@ import { buildResetDisplay } from '@/utils/quota';
 import { useNow } from '@/hooks/useNow';
 import { QuotaMeter } from '../../components/QuotaMeter';
 import { QuotaResetLabel } from '../../components/QuotaResetLabel';
+import { ClaudeQuotaNotice } from './ClaudeQuotaNotice';
 import { collectQuotaRowInstants, pickUrgentRowId } from '../../resetSchedule';
 import type { QuotaBodyProps } from '../../types';
 
@@ -25,6 +26,7 @@ export function ClaudeQuotaBody({ quota, classes }: QuotaBodyProps<ClaudeQuotaSt
 
   return (
     <>
+      {quota.notice && <ClaudeQuotaNotice notice={quota.notice} className={classes.quotaMessage} />}
       {planType && (
         <div className={classes.codexPlan}>
           <span className={classes.codexPlanLabel}>{t('claude_quota.plan_label')}</span>

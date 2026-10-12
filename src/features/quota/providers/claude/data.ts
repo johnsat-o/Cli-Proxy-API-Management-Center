@@ -8,6 +8,7 @@ import type {
   AuthFileItem,
   ClaudeExtraUsage,
   ClaudeProfileResponse,
+  ClaudeQuotaNotice,
   ClaudeQuotaState,
   ClaudeQuotaWindow,
   ClaudeUsageWindow,
@@ -30,12 +31,26 @@ import {
   isDisabledAuthFile,
 } from '@/utils/quota';
 import { normalizeAuthIndex } from '@/utils/authIndex';
-import type { QuotaProviderData } from '../types';
+import type { QuotaFetchOptions, QuotaProviderData } from '../types';
+import {
+  CLAUDE_PLAN_CACHE_TTL_MS,
+  CLAUDE_USAGE_CACHE_TTL_MS,
+  buildClaudeSignalWindows,
+  parseRetryAfterMs,
+  readClaudeUsageCache,
+  writeClaudeUsageCache,
+} from './usageCache';
 
 export type ClaudeQuotaData = {
   windows: ClaudeQuotaWindow[];
   extraUsage?: ClaudeExtraUsage | null;
   planType?: string | null;
+  /** Set when Anthropic rate-limited the lookup and older numbers are shown. */
+  notice?: ClaudeQuotaNotice;
+  /** Numbers came from the cache or the proxy, not a live lookup. */
+  stale?: boolean;
+  /** The lookup's error text when there was nothing to fall back to. */
+  error?: string;
 };
 
 const findFableUsageLimit = (payload: ClaudeUsagePayload) => {
@@ -173,12 +188,55 @@ export const resolveClaudePlanType = (profile: ClaudeProfileResponse | null): st
   return null;
 };
 
-const fetchClaudeQuota = async (file: AuthFileItem, t: TFunction): Promise<ClaudeQuotaData> => {
+const quotaFromPayload = (
+  payload: ClaudeUsagePayload,
+  planType: string | null | undefined,
+  t: TFunction
+): ClaudeQuotaData => ({
+  windows: buildClaudeQuotaWindows(payload, t),
+  extraUsage: payload.extra_usage,
+  planType: planType ?? null,
+});
+
+/** The cached usage when it is young enough to skip the network, else null. */
+export const readFreshClaudeQuota = (
+  file: AuthFileItem,
+  t: TFunction,
+  now = Date.now()
+): ClaudeQuotaData | null => {
+  const authIndex = normalizeAuthIndex(file['auth_index'] ?? file.authIndex);
+  if (!authIndex) return null;
+  const cached = readClaudeUsageCache(authIndex);
+  if (!cached?.usage || !cached.usageAt || now - cached.usageAt >= CLAUDE_USAGE_CACHE_TTL_MS) {
+    return null;
+  }
+  return { ...quotaFromPayload(cached.usage, cached.planType, t), stale: true };
+};
+
+/**
+ * One path for page load, "Refresh all credentials" and per-card refresh.
+ * Without `force` a usage payload younger than 120 s is reused with no call.
+ * A 429 falls back to the cached usage, then to the proxy's relayed headers.
+ */
+const fetchClaudeQuota = async (
+  file: AuthFileItem,
+  t: TFunction,
+  options: QuotaFetchOptions = {}
+): Promise<ClaudeQuotaData> => {
   const rawAuthIndex = file['auth_index'] ?? file.authIndex;
   const authIndex = normalizeAuthIndex(rawAuthIndex);
   if (!authIndex) {
     throw new Error(t('claude_quota.missing_auth_index'));
   }
+
+  if (!options.force) {
+    const fresh = readFreshClaudeQuota(file, t);
+    if (fresh) return fresh;
+  }
+
+  const cached = readClaudeUsageCache(authIndex);
+  const planIsFresh =
+    cached?.planAt !== undefined && Date.now() - cached.planAt < CLAUDE_PLAN_CACHE_TTL_MS;
 
   const [usageResult, profileResult] = await Promise.allSettled([
     apiCallApi.request({
@@ -187,12 +245,14 @@ const fetchClaudeQuota = async (file: AuthFileItem, t: TFunction): Promise<Claud
       url: CLAUDE_USAGE_URL,
       header: { ...CLAUDE_REQUEST_HEADERS },
     }),
-    apiCallApi.request({
-      authIndex,
-      method: 'GET',
-      url: CLAUDE_PROFILE_URL,
-      header: { ...CLAUDE_REQUEST_HEADERS },
-    }),
+    planIsFresh
+      ? Promise.resolve(null)
+      : apiCallApi.request({
+          authIndex,
+          method: 'GET',
+          url: CLAUDE_PROFILE_URL,
+          header: { ...CLAUDE_REQUEST_HEADERS },
+        }),
   ]);
 
   if (usageResult.status === 'rejected') {
@@ -200,6 +260,43 @@ const fetchClaudeQuota = async (file: AuthFileItem, t: TFunction): Promise<Claud
   }
 
   const result = usageResult.value;
+  const now = Date.now();
+
+  let planType = cached?.planType ?? null;
+  const profile = profileResult.status === 'fulfilled' ? profileResult.value : null;
+  if (profile && profile.statusCode >= 200 && profile.statusCode < 300) {
+    planType = resolveClaudePlanType(parseClaudeProfilePayload(profile.body ?? profile.bodyText));
+    writeClaudeUsageCache(authIndex, { planType, planAt: now });
+  }
+
+  if (result.statusCode === 429) {
+    const retry = {
+      retryAtMs: now + parseRetryAfterMs(result.header, now),
+      autoRetry: !options.autoRetry,
+    };
+    if (cached?.usage) {
+      return {
+        ...quotaFromPayload(cached.usage, planType, t),
+        stale: true,
+        notice: { source: 'cache', asOfMs: cached.usageAt ?? null, ...retry },
+      };
+    }
+    const fromSignals = buildClaudeSignalWindows(file, t);
+    if (fromSignals) {
+      return {
+        windows: fromSignals.windows,
+        planType,
+        stale: true,
+        notice: { source: 'proxy', asOfMs: fromSignals.observedAtMs, ...retry },
+      };
+    }
+    return {
+      windows: [],
+      stale: true,
+      notice: { source: 'none', asOfMs: null, ...retry },
+      error: getApiCallErrorMessage(result),
+    };
+  }
 
   if (result.statusCode < 200 || result.statusCode >= 300) {
     throw createStatusError(getApiCallErrorMessage(result), result.statusCode);
@@ -210,17 +307,8 @@ const fetchClaudeQuota = async (file: AuthFileItem, t: TFunction): Promise<Claud
     throw new Error(t('claude_quota.empty_windows'));
   }
 
-  const windows = buildClaudeQuotaWindows(payload, t);
-  const planType =
-    profileResult.status === 'fulfilled' &&
-    profileResult.value.statusCode >= 200 &&
-    profileResult.value.statusCode < 300
-      ? resolveClaudePlanType(
-          parseClaudeProfilePayload(profileResult.value.body ?? profileResult.value.bodyText)
-        )
-      : null;
-
-  return { windows, extraUsage: payload.extra_usage, planType };
+  writeClaudeUsageCache(authIndex, { usage: payload, usageAt: now });
+  return quotaFromPayload(payload, planType, t);
 };
 
 export const CLAUDE_CONFIG: QuotaProviderData<ClaudeQuotaState, ClaudeQuotaData> = {
@@ -231,12 +319,25 @@ export const CLAUDE_CONFIG: QuotaProviderData<ClaudeQuotaState, ClaudeQuotaData>
   storeSelector: (state) => state.claudeQuota,
   storeSetter: 'setClaudeQuota',
   buildLoadingState: () => ({ status: 'loading', windows: [] }),
-  buildSuccessState: (data) => ({
-    status: 'success',
-    windows: data.windows,
-    extraUsage: data.extraUsage,
-    planType: data.planType,
-  }),
+  // A 429 with no cached usage and no proxy signals renders as the red error.
+  buildSuccessState: (data) =>
+    data.notice?.source === 'none'
+      ? {
+          status: 'error',
+          windows: [],
+          error: data.error,
+          errorStatus: 429,
+          notice: data.notice,
+          stale: true,
+        }
+      : {
+          status: 'success',
+          windows: data.windows,
+          extraUsage: data.extraUsage,
+          planType: data.planType,
+          notice: data.notice,
+          stale: data.stale,
+        },
   buildErrorState: (message, status) => ({
     status: 'error',
     windows: [],

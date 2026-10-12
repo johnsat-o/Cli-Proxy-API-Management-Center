@@ -176,11 +176,26 @@ export interface ClaudeQuotaWindow {
   periodHours?: number | null;
 }
 
+/** Shown when Anthropic rate-limited the live usage lookup. */
+export interface ClaudeQuotaNotice {
+  /** cache: last stored lookup; proxy: the proxy's last relayed headers; none: nothing to show. */
+  source: 'cache' | 'proxy' | 'none';
+  /** When the numbers shown were current, epoch ms. */
+  asOfMs: number | null;
+  /** When the lookup may be tried again, epoch ms (from Retry-After). */
+  retryAtMs: number;
+  /** True until the single automatic retry has run. */
+  autoRetry: boolean;
+}
+
 export interface ClaudeQuotaState {
   status: 'idle' | 'loading' | 'success' | 'error';
   windows: ClaudeQuotaWindow[];
   extraUsage?: ClaudeExtraUsage | null;
   planType?: string | null;
+  notice?: ClaudeQuotaNotice;
+  /** Numbers came from the cache or the proxy, not a live lookup. */
+  stale?: boolean;
   error?: string;
   errorStatus?: number;
 }

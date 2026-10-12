@@ -510,7 +510,12 @@
     "plan_max": "Max",
     "plan_max5": "Max 5x",
     "plan_max20": "Max 20x",
-    "plan_team": "Team"
+    "plan_team": "Team",
+    "rate_limited_as_of": "As of {{time}}, Anthropic rate-limited the lookup",
+    "proxy_last_reply": "Proxy's last reply at {{time}}",
+    "rate_limited": "Anthropic rate-limited the lookup",
+    "retrying_in": "retrying in {{seconds}} s",
+    "retry_manually": "press Refresh quota to try again"
   },
   "codex_quota": {
     "title": "Codex Quota",

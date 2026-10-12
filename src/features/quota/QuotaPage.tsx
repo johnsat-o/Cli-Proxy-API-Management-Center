@@ -48,6 +48,10 @@ import { nextRecoveryMs } from './resetSchedule';
 import { QUOTA_ADAPTERS, getQuotaSetter, type QuotaCardState } from './providers';
 import type { QuotaProviderType } from './providers/types';
 import { useDevinQuotaAutoLoad } from './providers/devin/useDevinQuotaAutoLoad';
+import {
+  useClaudeQuotaAutoRetry,
+  useClaudeQuotaCacheHydrate,
+} from './providers/claude/useClaudeQuotaCache';
 import { useQuotaActions } from './hooks/useQuotaActions';
 import { useQuotaBatchLoader } from './hooks/useQuotaBatchLoader';
 import { readQuotaUiState, writeQuotaUiState } from './uiState';
@@ -285,7 +289,7 @@ export function QuotaPage() {
         disableControls
       )
     ) {
-      void loadQuota(pageItems);
+      void loadQuota(pageItems, { force: true });
     }
   }, [disableControls, error, filesGeneration, loading, loadQuota, pageItems, sessionGeneration]);
 
@@ -298,6 +302,13 @@ export function QuotaPage() {
       filesGeneration !== sessionGeneration,
     loadQuota
   );
+
+  useClaudeQuotaCacheHydrate(pageItems);
+  const retryClaudeQuota = useCallback(
+    (file: AuthFileItem) => void refreshQuota(file, QUOTA_ADAPTERS.claude, { autoRetry: true }),
+    [refreshQuota]
+  );
+  useClaudeQuotaAutoRetry(pageItems, retryClaudeQuota);
 
   const canUseActions = !disableControls && !loading && filesGeneration === sessionGeneration;
 

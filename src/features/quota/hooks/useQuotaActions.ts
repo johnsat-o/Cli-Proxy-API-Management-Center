@@ -27,7 +27,7 @@ export function useQuotaActions(disableControls: boolean) {
   const [resettingQuotaName, setResettingQuotaName] = useState<string | null>(null);
 
   const refreshQuota = useCallback(
-    async (file: AuthFileItem, adapter: QuotaAdapter) => {
+    async (file: AuthFileItem, adapter: QuotaAdapter, options?: { autoRetry?: boolean }) => {
       if (disableControls || file.disabled) return;
       const cacheKey = getQuotaCacheKey(file);
       if (resettingQuotaName === cacheKey) return;
@@ -41,7 +41,8 @@ export function useQuotaActions(disableControls: boolean) {
       }));
 
       try {
-        const data = await adapter.fetchQuota(file, t);
+        // The Refresh button always asks for live numbers.
+        const data = await adapter.fetchQuota(file, t, { force: true, ...options });
         commitIfQuotaCacheCurrent(cacheGeneration, () => {
           const successState = adapter.buildSuccessState(data);
           setQuota((prev) => ({
