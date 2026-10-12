@@ -1,3 +1,5 @@
+import type { AnthropicResetGrantStatus } from '@/services/api/claudeResetGrants';
+
 /**
  * Quota management types.
  */
@@ -136,6 +138,8 @@ export interface ClaudeUsagePayload {
   iguana_necktie?: ClaudeUsageWindow | null;
   limits?: ClaudeUsageLimit[] | null;
   extra_usage?: ClaudeExtraUsage | null;
+  /** Banked reset grants; present when the lookup asked for `cedar_ember=1`. */
+  cedar_ember?: unknown;
 }
 
 export interface ClaudeProfileResponse {
@@ -196,6 +200,8 @@ export interface ClaudeQuotaState {
   notice?: ClaudeQuotaNotice;
   /** Numbers came from the cache or the proxy, not a live lookup. */
   stale?: boolean;
+  /** Banked reset grants from the same usage lookup; null when it carried none. */
+  resetGrants?: AnthropicResetGrantStatus | null;
   error?: string;
   errorStatus?: number;
 }

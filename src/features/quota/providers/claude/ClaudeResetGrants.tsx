@@ -4,21 +4,25 @@ import { useNow } from '@/hooks/useNow';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useNotificationStore } from '@/stores';
 import { apiClient } from '@/services/api/client';
-import {
-  readClaudeResetGrants,
-  type AnthropicResetGrantStatus,
-} from '@/services/api/claudeResetGrants';
+import type { AnthropicResetGrantStatus } from '@/services/api/claudeResetGrants';
 import type { AuthFileItem } from '@/types';
 import { normalizeAuthIndex } from '@/utils/quota';
 import { resetGrantOperations, RETRY_WINDOW_MS } from './resetGrantOperations';
 import { selectResetGrant } from './selectResetGrant';
 
-/** Card-owned reads; the session-scoped journal owns spending and ambiguous retries. */
+/**
+ * Card-owned view of the banked resets; the session-scoped journal owns spending
+ * and ambiguous retries.
+ *
+ * The grant block arrives with the card's usage lookup (`?cedar_ember=1`), so this
+ * hook makes no call of its own: Anthropic rate-limits that endpoint per token, and
+ * a second read per card was what pushed two open Consoles into the 429 lock.
+ * Spending still re-reads live status right before the claim.
+ */
 export function useClaudeResetGrants(
   file: AuthFileItem,
-  enabled: boolean,
+  status: AnthropicResetGrantStatus | null,
   disabled: boolean,
-  refreshToken: unknown,
   onRefresh: () => void
 ) {
   const { t } = useTranslation();
@@ -31,35 +35,14 @@ export function useClaudeResetGrants(
   const now = useNow();
   const authIndex = normalizeAuthIndex(file.auth_index ?? file.authIndex);
   const key = JSON.stringify([file.name, authIndex]);
-  const [status, setStatus] = useState<AnthropicResetGrantStatus | null>(null);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState('');
-  const [reload, setReload] = useState(0);
   const lock = useRef(false);
+  // Bumped when the card starts showing another account, so a claim that was
+  // confirmed for the previous one can neither notify nor refresh this one.
   const generation = useRef(0);
   useEffect(() => {
-    const version = ++generation.current;
-    setStatus(null);
-    if (!enabled || disabled || !sessionActive || !authIndex) return;
-    let cancelled = false;
-    const current = () =>
-      !cancelled && version === generation.current && session === apiClient.getConnectionRevision();
-    void readClaudeResetGrants(authIndex).then(
-      (result) => {
-        if (current()) {
-          setStatus(result);
-          setMessage('');
-        }
-      },
-      () => {
-        if (current()) setMessage('read_error');
-      }
-    );
-    return () => {
-      cancelled = true;
-      generation.current += 1;
-    };
-  }, [authIndex, key, enabled, disabled, sessionActive, session, refreshToken, reload]);
+    generation.current += 1;
+  }, [key]);
 
   const operation = resetGrantOperations.inspect(key);
   const pending = operation && !operation.code ? operation : undefined;
@@ -101,10 +84,10 @@ export function useClaudeResetGrants(
           );
         } finally {
           lock.current = false;
-          // A concurrent page-wide refresh can invalidate this read generation.
+          // A concurrent page-wide refresh can invalidate this generation.
           // Release the local lock regardless, but never refresh a replacement account.
           setBusy(false);
-          setReload((value) => value + 1);
+          // The refreshed usage lookup brings the new grant balance with it.
           if (current()) onRefresh();
         }
       },
@@ -116,7 +99,7 @@ export function useClaudeResetGrants(
     busy,
     blocked,
     confirm,
-    message: pending ? (expired ? 'expired' : 'unknown') : message,
+    message: pending ? (expired ? 'expired' : 'unknown') : '',
     buttonLabel: pending ? 'retry' : 'use',
   };
 }

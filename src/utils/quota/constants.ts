@@ -109,6 +109,12 @@ export const CLAUDE_PROFILE_URL = 'https://api.anthropic.com/api/oauth/profile';
 
 export const CLAUDE_USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
 
+/**
+ * The same lookup with the banked-reset block included, so the quota card and
+ * its "Resets remaining" row cost one rate-limited call, not two.
+ */
+export const CLAUDE_USAGE_WITH_GRANTS_URL = `${CLAUDE_USAGE_URL}?cedar_ember=1`;
+
 export const CLAUDE_REQUEST_HEADERS = {
   'User-Agent': 'claude-cli/2.1.280 (external, cli)',
   Authorization: 'Bearer $TOKEN$',

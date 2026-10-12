@@ -71,10 +71,9 @@ export function QuotaCard(props: QuotaCardProps) {
   const loading = status === 'loading';
   const claudeReset = useClaudeResetGrants(
     file,
-    // The grant read hits Anthropic's rate-limited usage endpoint: only after a live lookup.
-    entry.type === 'claude' && status !== 'idle' && !(quota as ClaudeQuotaState | undefined)?.stale,
+    // The grant block rides along with the usage lookup; no extra Anthropic call.
+    entry.type === 'claude' ? ((quota as ClaudeQuotaState | undefined)?.resetGrants ?? null) : null,
     !canRefresh || loading || resetting,
-    quota,
     onRefresh
   );
   const providerType =

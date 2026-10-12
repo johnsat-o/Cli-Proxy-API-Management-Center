@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import type { TFunction } from 'i18next';
 import { CLAUDE_CONFIG, readFreshClaudeQuota } from '@/features/quota/providers/claude/data';
 import {
@@ -6,6 +6,7 @@ import {
   parseRetryAfterMs,
   writeClaudeUsageCache,
 } from '@/features/quota/providers/claude/usageCache';
+import { apiCallApi } from '@/services/api/apiCall';
 import type { AuthFileItem } from '@/types';
 
 const t = ((key: string) => key) as unknown as TFunction;
@@ -81,5 +82,41 @@ describe('proxy signal fallback', () => {
     expect(CLAUDE_CONFIG.buildSuccessState({ windows: [], notice, error: '429 x' })).toMatchObject(
       { status: 'error', errorStatus: 429, error: '429 x' }
     );
+  });
+});
+
+describe('banked resets ride along with the usage lookup', () => {
+  const originalRequest = apiCallApi.request;
+  afterEach(() => {
+    apiCallApi.request = originalRequest;
+    store.clear();
+  });
+
+  const grant = { id: 'launch', resets_total: 1, resets_left: 1, usable_now: true };
+  const payload = {
+    five_hour: { utilization: 34, resets_at: null },
+    cedar_ember: { eligible: true, at_limit: false, grants: [grant] },
+  };
+
+  test('one call asks for cedar_ember and the result carries the grants', async () => {
+    const urls: string[] = [];
+    apiCallApi.request = async (request) => {
+      urls.push(request.url);
+      return { statusCode: 200, body: payload, bodyText: '', header: {} };
+    };
+    const data = await CLAUDE_CONFIG.fetchQuota(file(), t, { force: true });
+    expect(urls.filter((u) => u.includes('/api/oauth/usage'))).toEqual([
+      'https://api.anthropic.com/api/oauth/usage?cedar_ember=1',
+    ]);
+    expect(data.resetGrants?.grants.map((g) => [g.id, g.resetsLeft])).toEqual([['launch', 1]]);
+    expect(CLAUDE_CONFIG.buildSuccessState(data).resetGrants?.grants).toHaveLength(1);
+  });
+
+  test('a cached payload keeps its grants; a payload without the block gives null', () => {
+    const now = 5_000_000;
+    writeClaudeUsageCache('abc', { usage: payload, usageAt: now });
+    expect(readFreshClaudeQuota(file(), t, now)?.resetGrants?.grants[0].id).toBe('launch');
+    writeClaudeUsageCache('abc', { usage: { five_hour: { utilization: 1, resets_at: null } } });
+    expect(readFreshClaudeQuota(file(), t, now)?.resetGrants).toBeNull();
   });
 });

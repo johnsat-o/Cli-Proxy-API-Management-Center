@@ -16,8 +16,12 @@ import type {
 } from '@/types';
 import { apiCallApi, getApiCallErrorMessage } from '@/services/api';
 import {
+  parseAnthropicResetGrantStatus,
+  type AnthropicResetGrantStatus,
+} from '@/services/api/claudeResetGrants';
+import {
   CLAUDE_PROFILE_URL,
-  CLAUDE_USAGE_URL,
+  CLAUDE_USAGE_WITH_GRANTS_URL,
   CLAUDE_REQUEST_HEADERS,
   CLAUDE_USAGE_WINDOW_KEYS,
   claudePeriodHours,
@@ -49,6 +53,8 @@ export type ClaudeQuotaData = {
   notice?: ClaudeQuotaNotice;
   /** Numbers came from the cache or the proxy, not a live lookup. */
   stale?: boolean;
+  /** Banked reset grants carried by the usage payload; null when absent or malformed. */
+  resetGrants?: AnthropicResetGrantStatus | null;
   /** The lookup's error text when there was nothing to fall back to. */
   error?: string;
 };
@@ -196,6 +202,7 @@ const quotaFromPayload = (
   windows: buildClaudeQuotaWindows(payload, t),
   extraUsage: payload.extra_usage,
   planType: planType ?? null,
+  resetGrants: parseAnthropicResetGrantStatus(payload.cedar_ember),
 });
 
 /** The cached usage when it is young enough to skip the network, else null. */
@@ -242,7 +249,7 @@ const fetchClaudeQuota = async (
     apiCallApi.request({
       authIndex,
       method: 'GET',
-      url: CLAUDE_USAGE_URL,
+      url: CLAUDE_USAGE_WITH_GRANTS_URL,
       header: { ...CLAUDE_REQUEST_HEADERS },
     }),
     planIsFresh
@@ -337,6 +344,7 @@ export const CLAUDE_CONFIG: QuotaProviderData<ClaudeQuotaState, ClaudeQuotaData>
           planType: data.planType,
           notice: data.notice,
           stale: data.stale,
+          resetGrants: data.resetGrants ?? null,
         },
   buildErrorState: (message, status) => ({
     status: 'error',
